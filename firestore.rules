@@ -1,0 +1,339 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // This security rules file assumes the following data structures:
+    //
+    // Collection: bills
+    // Document ID: auto-generated billId (e.g., Firestore auto-ID)
+    // Fields:
+    //   - id: string (optional, max 100 chars, immutable) - Document identifier reference
+    //   - name: string (required, 1-150 chars) - Name / title of the bill
+    //   - category: string (required, 1-50 chars) - Category name or identifier
+    //   - amount: number (required, non-negative, <= 1000000000) - Bill amount
+    //   - dueDate: string (optional, YYYY-MM-DD format or empty string) - Due date
+    //   - paymentDate: string (optional, YYYY-MM-DD format or empty string) - Payment date
+    //   - status: string (required, 'Paid' or 'Pending') - Payment status
+    //   - paymentMethod: string (optional, max 100 chars) - Payment method used
+    //   - notes: string (optional, max 1000 chars) - Additional notes or remarks
+    //   - userId: string (required, immutable) - Firebase Auth UID of bill owner
+    //   - createdAt: timestamp or string (optional, max 50 chars, immutable) - Creation time
+    //   - updatedAt: timestamp or string (optional, max 50 chars) - Last update time
+    //
+    // Collection: user_settings
+    // Document ID: userId (Firebase Auth UID of the document owner)
+    // Fields:
+    //   - userId: string (optional, max 128 chars, immutable, matches document ID)
+    //   - customCategories: list or map (optional, max 100 entries) - Custom category definitions
+    //   - preferences: map (optional, max 50 keys) - User preferences and UI configuration
+    //   - monthlyBudgets: map (optional, max 100 keys, YYYY-MM keys to non-negative amounts <= 1000000000) - Monthly budget allowances
+    //   - theme: string (optional, max 50 chars) - UI theme setting
+    //   - currency: string (optional, max 20 chars) - Selected currency symbol or code
+    //   - dateFormat: string (optional, max 50 chars) - Date display preference
+    //   - language: string (optional, max 20 chars) - UI language preference
+    //   - notifications: bool or map (optional, max 20 keys) - Notification preferences
+    //   - createdAt: timestamp or string (optional, max 50 chars, immutable) - Creation timestamp
+    //   - updatedAt: timestamp or string (optional, max 50 chars) - Last updated timestamp
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if the authenticated user owns the resource
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Verify required bill fields are present
+    function hasRequiredBillFields(data) {
+      return data.keys().hasAll(['name', 'category', 'amount', 'status', 'userId']);
+    }
+
+    // Verify only allowed bill fields are present (Strict Schema / No schema pollution)
+    function hasOnlyAllowedBillFields(data) {
+      return data.keys().hasOnly([
+        'id',
+        'name',
+        'category',
+        'amount',
+        'dueDate',
+        'paymentDate',
+        'status',
+        'paymentMethod',
+        'notes',
+        'userId',
+        'createdAt',
+        'updatedAt'
+      ]);
+    }
+
+    // Validate bill name (non-empty string, max 150 characters)
+    function isValidName(name) {
+      return name is string && name.size() > 0 && name.size() <= 150;
+    }
+
+    // Validate category (non-empty string, max 50 characters)
+    function isValidCategory(category) {
+      return category is string && category.size() > 0 && category.size() <= 50;
+    }
+
+    // Validate amount (numeric, non-negative, realistic upper bound)
+    function isValidAmount(amount) {
+      return (amount is int || amount is float) && amount >= 0 && amount <= 1000000000;
+    }
+
+    // Validate status (must be strictly 'Paid' or 'Pending')
+    function isValidStatus(status) {
+      return status is string && (status == 'Paid' || status == 'Pending');
+    }
+
+    // Validate date string (YYYY-MM-DD format or empty string)
+    function isValidDateOrEmpty(dateVal) {
+      return dateVal is string &&
+        (dateVal == '' || dateVal.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'));
+    }
+
+    // Validate optional dueDate
+    function isValidDueDate(data) {
+      return !('dueDate' in data) || isValidDateOrEmpty(data.dueDate);
+    }
+
+    // Validate optional paymentDate
+    function isValidPaymentDate(data) {
+      return !('paymentDate' in data) || isValidDateOrEmpty(data.paymentDate);
+    }
+
+    // Validate optional paymentMethod (string, max 100 chars)
+    function isValidPaymentMethod(data) {
+      return !('paymentMethod' in data) ||
+        (data.paymentMethod is string && data.paymentMethod.size() <= 100);
+    }
+
+    // Validate optional notes (string, max 1000 chars)
+    function isValidNotes(data) {
+      return !('notes' in data) ||
+        (data.notes is string && data.notes.size() <= 1000);
+    }
+
+    // Validate optional id (string, max 100 chars)
+    function isValidId(data) {
+      return !('id' in data) ||
+        (data.id is string && data.id.size() > 0 && data.id.size() <= 100);
+    }
+
+    // Validate optional createdAt (timestamp or ISO string max 50 chars)
+    function isValidCreatedAt(data) {
+      return !('createdAt' in data) ||
+        data.createdAt is timestamp ||
+        (data.createdAt is string && data.createdAt.size() <= 50);
+    }
+
+    // Validate optional updatedAt (timestamp or ISO string max 50 chars)
+    function isValidUpdatedAt(data) {
+      return !('updatedAt' in data) ||
+        data.updatedAt is timestamp ||
+        (data.updatedAt is string && data.updatedAt.size() <= 50);
+    }
+
+    // Validate that immutable userId in bills has not been modified
+    function userIdNotModified() {
+      return request.resource.data.userId == resource.data.userId;
+    }
+
+    // Validate that immutable createdAt has not been modified
+    function createdAtNotModified() {
+      return !('createdAt' in resource.data) ||
+        request.resource.data.createdAt == resource.data.createdAt;
+    }
+
+    // Validate that immutable id has not been modified
+    function idNotModified() {
+      return !('id' in resource.data) ||
+        request.resource.data.id == resource.data.id;
+    }
+
+    // Domain validator for bill documents (enforced on both create and update)
+    function isValidBill(data) {
+      return hasRequiredBillFields(data) &&
+        hasOnlyAllowedBillFields(data) &&
+        isValidName(data.name) &&
+        isValidCategory(data.category) &&
+        isValidAmount(data.amount) &&
+        isValidStatus(data.status) &&
+        data.userId is string &&
+        data.userId == request.auth.uid &&
+        isValidDueDate(data) &&
+        isValidPaymentDate(data) &&
+        isValidPaymentMethod(data) &&
+        isValidNotes(data) &&
+        isValidId(data) &&
+        isValidCreatedAt(data) &&
+        isValidUpdatedAt(data);
+    }
+
+    // ===============================================================
+    // User Settings Helper Functions & Domain Validator
+    // ===============================================================
+
+    // Verify only allowed user_settings fields are present (Strict Schema / No schema pollution)
+    function hasOnlyAllowedUserSettingsFields(data) {
+      return data.keys().hasOnly([
+        'userId',
+        'customCategories',
+        'preferences',
+        'monthlyBudgets',
+        'theme',
+        'currency',
+        'dateFormat',
+        'language',
+        'notifications',
+        'createdAt',
+        'updatedAt'
+      ]);
+    }
+
+    // Validate optional userId in user_settings (must match document path userId and auth UID)
+    function isValidUserSettingsUserId(data, userId) {
+      return !('userId' in data) ||
+        (data.userId is string && data.userId == userId && data.userId == request.auth.uid && data.userId.size() <= 128);
+    }
+
+    // Validate optional customCategories (can be an array/list or object/map with realistic upper bound)
+    function isValidCustomCategories(data) {
+      return !('customCategories' in data) ||
+        ((data.customCategories is list && data.customCategories.size() <= 100) ||
+         (data.customCategories is map && data.customCategories.size() <= 100));
+    }
+
+    // Validate optional preferences (must be a map with realistic key bound)
+    function isValidPreferences(data) {
+      return !('preferences' in data) ||
+        (data.preferences is map && data.preferences.size() <= 50);
+    }
+
+    // Validate optional monthlyBudgets (must be a map with realistic key bound, max 100 entries)
+    function isValidMonthlyBudgets(data) {
+      return !('monthlyBudgets' in data) ||
+        (data.monthlyBudgets is map && data.monthlyBudgets.size() <= 100);
+    }
+
+    // Validate optional theme string
+    function isValidTheme(data) {
+      return !('theme' in data) ||
+        (data.theme is string && data.theme.size() <= 50);
+    }
+
+    // Validate optional currency string
+    function isValidCurrency(data) {
+      return !('currency' in data) ||
+        (data.currency is string && data.currency.size() <= 20);
+    }
+
+    // Validate optional dateFormat string
+    function isValidDateFormat(data) {
+      return !('dateFormat' in data) ||
+        (data.dateFormat is string && data.dateFormat.size() <= 50);
+    }
+
+    // Validate optional language string
+    function isValidLanguage(data) {
+      return !('language' in data) ||
+        (data.language is string && data.language.size() <= 20);
+    }
+
+    // Validate optional notifications setting (bool or map)
+    function isValidNotifications(data) {
+      return !('notifications' in data) ||
+        data.notifications is bool ||
+        (data.notifications is map && data.notifications.size() <= 20);
+    }
+
+    // Validate that immutable userId in user_settings has not been modified on update
+    function userSettingsUserIdNotModified() {
+      return !('userId' in resource.data) ||
+        (('userId' in request.resource.data) && request.resource.data.userId == resource.data.userId);
+    }
+
+    // Domain validator for user_settings documents (enforced on both create and update)
+    function isValidUserSettings(data, userId) {
+      return hasOnlyAllowedUserSettingsFields(data) &&
+        isValidUserSettingsUserId(data, userId) &&
+        isValidCustomCategories(data) &&
+        isValidPreferences(data) &&
+        isValidMonthlyBudgets(data) &&
+        isValidTheme(data) &&
+        isValidCurrency(data) &&
+        isValidDateFormat(data) &&
+        isValidLanguage(data) &&
+        isValidNotifications(data) &&
+        isValidCreatedAt(data) &&
+        isValidUpdatedAt(data);
+    }
+
+    // ===============================================================
+    // Collection Rules: bills
+    // ===============================================================
+
+    match /bills/{billId} {
+      // Authenticated users can only read bills where userId matches their auth.uid
+      allow read: if isOwner(resource.data.userId);
+
+      // Authenticated users can create bills belonging to them, strictly validated
+      allow create: if isAuthenticated() &&
+        isOwner(request.resource.data.userId) &&
+        isValidBill(request.resource.data);
+
+      // Authenticated owners can update their bills; userId, createdAt, and id are immutable
+      allow update: if isOwner(resource.data.userId) &&
+        userIdNotModified() &&
+        createdAtNotModified() &&
+        idNotModified() &&
+        isValidBill(request.resource.data);
+
+      // Authenticated owners can delete their bills
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    // ===============================================================
+    // Collection Rules: user_settings
+    // ===============================================================
+
+    match /user_settings/{userId} {
+      // Only the authenticated user matching userId can read their settings
+      allow read: if isOwner(userId);
+
+      // Only the authenticated user matching userId can create their settings
+      allow create: if isOwner(userId) &&
+        isValidUserSettings(request.resource.data, userId);
+
+      // Only the authenticated user matching userId can update their settings
+      allow update: if isOwner(userId) &&
+        userSettingsUserIdNotModified() &&
+        createdAtNotModified() &&
+        isValidUserSettings(request.resource.data, userId);
+
+      // Only the authenticated user matching userId can delete their settings
+      allow delete: if isOwner(userId);
+    }
+
+    // ===============================================================
+    // Default Deny Rule
+    // ===============================================================
+    // Disallow read and write access to any other collections or paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <!-- House outline -->
+  <path d="M50 16 L18 42 L26 42 L26 80 L74 80 L74 42 L82 42 Z" fill="#064e3b" />
+  <!-- Door / Window -->
+  <rect x="42" y="52" width="16" height="28" rx="2" fill="#ecfdf5" />
+  <circle cx="50" cy="36" r="6" fill="#10b981" />
+  <!-- Sprout leaves on top-left -->
+  <path d="M22 28 C14 18, 22 10, 32 14 C32 24, 24 28, 22 28 Z" fill="#10b981" />
+  <path d="M14 36 C8 28, 14 22, 22 24 C22 32, 16 36, 14 36 Z" fill="#34d399" />
+  <!-- Bottom leaf accent -->
+  <path d="M16 84 C8 78, 12 70, 22 72 C22 80, 18 84, 16 84 Z" fill="#10b981" />
+</svg>
